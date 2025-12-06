@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quora Question Duplication Checker</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7fafc;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4 bg-gray-100">
+
+    <div id="app" class="w-full max-w-2xl bg-white shadow-2xl rounded-xl p-6 md:p-10 border border-gray-200">
+        <h1 class="text-3xl font-bold text-gray-800 text-center mb-2">Question Comparison</h1>
+        <p class="text-center text-gray-500 mb-8">Check if two questions have the same meaning or intent.</p>
+
+        <!-- Question Input 1 -->
+        <div class="mb-6">
+            <label for="question1" class="block text-sm font-medium text-gray-700 mb-2">First Question (Question 1)</label>
+            <textarea id="question1" rows="3" placeholder="Example: What is the step-by-step guide to invest in the share market in India?"
+                class="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out resize-none shadow-sm"></textarea>
+        </div>
+
+        <!-- Question Input 2 -->
+        <div class="mb-8">
+            <label for="question2" class="block text-sm font-medium text-gray-700 mb-2">Second Question (Question 2)</label>
+            <textarea id="question2" rows="3" placeholder="Example: Can you tell me how to put money in the stock market?"
+                class="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out resize-none shadow-sm"></textarea>
+        </div>
+
+        <!-- Check Button -->
+        <button id="checkButton" onclick="checkDuplication()"
+            class="w-full flex items-center justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition duration-150 ease-in-out shadow-lg transform hover:scale-[1.01] disabled:bg-blue-400">
+            <span id="buttonText">Analyze and Compare</span>
+            <svg id="spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+        </button>
+
+        <!-- Result Display -->
+        <div id="resultContainer" class="mt-8 p-4 text-center rounded-lg border-2 hidden">
+            <p id="resultText" class="text-xl font-semibold"></p>
+        </div>
+
+        <!-- Error Message (for API issues) -->
+        <div id="errorContainer" class="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg hidden">
+            <p class="font-medium">Error: Failed to classify the questions. Please try again.</p>
+        </div>
+
+    </div>
+
+    <script>
+        // API Key is required for the fetch call. Leave it empty for the runtime environment.
+        const apiKey = ""; 
+        const model = "gemini-2.5-flash-preview-09-2025";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        // Utility function for exponential backoff retry logic
+        async function fetchWithRetry(url, options, maxRetries = 5) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok && response.status === 429 && i < maxRetries - 1) {
+                        // Too Many Requests, try again with exponential backoff
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    return response;
+                } catch (error) {
+                    if (i < maxRetries - 1) {
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    throw error;
+                }
+            }
+            throw new Error("API request failed after multiple retries.");
+        }
+
+        function setLoading(isLoading) {
+            const button = document.getElementById('checkButton');
+            const buttonText = document.getElementById('buttonText');
+            const spinner = document.getElementById('spinner');
+
+            button.disabled = isLoading;
+            if (isLoading) {
+                buttonText.textContent = 'Analyzing...';
+                spinner.classList.remove('hidden');
+                button.classList.add('opacity-70', 'cursor-not-allowed');
+            } else {
+                buttonText.textContent = 'Analyze and Compare';
+                spinner.classList.add('hidden');
+                button.classList.remove('opacity-70', 'cursor-not-allowed');
+            }
+        }
+
+        function displayResult(isDuplicate) {
+            const container = document.getElementById('resultContainer');
+            const text = document.getElementById('resultText');
+
+            // Hide any previous error message
+            document.getElementById('errorContainer').classList.add('hidden');
+
+            container.classList.remove('hidden');
+
+            if (isDuplicate) {
+                container.className = 'mt-8 p-4 text-center rounded-lg border-2 border-green-500 bg-green-50';
+                text.textContent = 'Result: Duplicate';
+                text.classList.add('text-green-700');
+                text.classList.remove('text-red-700');
+            } else {
+                container.className = 'mt-8 p-4 text-center rounded-lg border-2 border-red-500 bg-red-50';
+                text.textContent = 'Result: Not Duplicate';
+                text.classList.remove('text-green-700');
+                text.classList.add('text-red-700');
+            }
+        }
+
+        function displayError() {
+            document.getElementById('errorContainer').classList.remove('hidden');
+            document.getElementById('resultContainer').classList.add('hidden');
+        }
+
+        async function checkDuplication() {
+            const q1 = document.getElementById('question1').value.trim();
+            const q2 = document.getElementById('question2').value.trim();
+
+            if (!q1 || !q2) {
+                // Use a simple custom modal/message box instead of alert()
+                document.getElementById('resultContainer').classList.add('hidden');
+                document.getElementById('errorContainer').textContent = "Please enter both questions.";
+                document.getElementById('errorContainer').classList.remove('hidden');
+                document.getElementById('errorContainer').classList.remove('bg-red-100', 'border-red-400', 'text-red-700');
+                document.getElementById('errorContainer').classList.add('bg-yellow-100', 'border-yellow-400', 'text-yellow-700');
+                return;
+            }
+
+            // Reset error display
+            document.getElementById('errorContainer').classList.add('hidden');
+            document.getElementById('errorContainer').textContent = "Error: Failed to classify the questions. Please try again.";
+            document.getElementById('errorContainer').classList.add('bg-red-100', 'border-red-400', 'text-red-700');
+
+            setLoading(true);
+
+            // System Instruction tells the LLM to mimic the classification model's output
+            const systemPrompt = "Act as a highly accurate Quora question pair classification model. Compare the semantic meaning of the two provided questions. If they are asking the exact same thing (even if phrased differently), respond with ONLY the word 'Duplicate'. Otherwise, respond with ONLY the word 'Not Duplicate'. Do not include any explanation or punctuation.";
+            const userQuery = `Question 1: ${q1}\nQuestion 2: ${q2}`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+            };
+
+            const options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            };
+
+            try {
+                const response = await fetchWithRetry(apiUrl, options);
+                const result = await response.json();
+
+                const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase();
+
+                if (responseText === 'duplicate') {
+                    displayResult(true);
+                } else if (responseText === 'not duplicate') {
+                    displayResult(false);
+                } else {
+                    // Handle unexpected response format
+                    displayError();
+                    console.error("Unexpected API response:", responseText);
+                }
+
+            } catch (error) {
+                displayError();
+                console.error("API Call Error:", error);
+            } finally {
+                setLoading(false);
+            }
+        }
+    </script>
+</body>
+</html>
